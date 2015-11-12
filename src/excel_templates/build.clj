@@ -398,8 +398,11 @@ If there are any nil values in the source collection, the corresponding cells ar
               v)))
    replacements))
 
-(defn- copy-from-template!
-  [src-sheet dst-wb sheet-num sheet-data translation-table]
+(S/defn ^:private copy-from-template!
+  [src-sheet dst-wb
+   sheet-num :- S/Int
+   sheet-data :- SheetType
+   translation-table]
   ;; loop through the rows of the template, copying
   ;; from the template or injecting data rows as
   ;; appropriate

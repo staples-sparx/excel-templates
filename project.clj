@@ -6,5 +6,7 @@
   :dependencies [[org.apache.poi/poi-ooxml "3.10-FINAL"]
                  [org.apache.poi/ooxml-schemas "1.1"]
                  [org.clojure/data.zip "0.1.1" :exclusions [[org.clojure/clojure]]]
-                 [joda-time "2.7"]]
+                 [clojure-csv/clojure-csv "2.0.1"]
+                 [joda-time "2.7"]
+                 [prismatic/schema "1.0.3"]]
   :profiles {:repl {:dependencies [[org.clojure/clojure "1.7.0"]]}})
