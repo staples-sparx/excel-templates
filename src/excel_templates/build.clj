@@ -9,8 +9,30 @@
             [clojure.java.shell :as sh]
             [clojure.pprint :as pp]
             [clojure.set :as set]
+            [schema.core :as S]
             [excel-templates.charts :as c]
             [excel-templates.formulas :as fo]))
+
+(def RowType
+  [S/Any])
+
+(def CSVType
+  {:file S/Str
+   (S/optional-key :delimiter) Character
+   (S/optional-key :end-of-line) S/Str
+   (S/optional-key :quote-char) Character
+   (S/optional-key :strict) S/Bool})
+
+(def ^:private RowSeqType
+  [(S/cond-pre RowType CSVType)])
+
+(def ^:private SheetType
+  {S/Int RowSeqType ; rows starting at offset
+   (S/optional-key :sheet-name) S/Str})
+
+(def ^:private ReplacementsType
+  ; Replacements schema
+  {S/Str [SheetType]})
 
 (defn create-temp-xlsx-file
   "Create a temp file with correct headers to be opened by OPCPackage"
@@ -376,9 +398,44 @@ If there are any nil values in the source collection, the corresponding cells ar
               v)))
    replacements))
 
-(defn render-to-file
+(defn- copy-from-template!
+  [src-sheet dst-wb sheet-num sheet-data translation-table]
+  ;; loop through the rows of the template, copying
+  ;; from the template or injecting data rows as
+  ;; appropriate
+  (let [sheet (.getSheetAt dst-wb sheet-num)
+        nrows (inc (.getLastRowNum src-sheet))]
+    (loop [src-row-num 0
+           dst-row-num 0]
+      (when (< src-row-num nrows)
+        (let [src-row (.getRow src-sheet src-row-num)]
+          (if-let [data-rows (get sheet-data src-row-num)]
+            (do
+              (doseq [[index data-row] (indexed data-rows)]
+                (let [new-row (.createRow sheet (+ dst-row-num index))]
+                  (inject-data-row data-row translation-table dst-wb sheet src-row new-row)
+                  (when src-row
+                    (copy-styles dst-wb src-row new-row))))
+              (recur (inc src-row-num) (+ dst-row-num (count data-rows))))
+            (do
+              (when src-row
+                (let [new-row (.createRow sheet dst-row-num)]
+                  (copy-row translation-table dst-wb sheet src-row new-row)
+                  (copy-styles dst-wb src-row new-row)))
+              (recur (inc src-row-num) (inc dst-row-num)))))))
+    (c/transform-charts sheet translation-table)))
+
+(defn- re-evaluate!
+  [wb]
+  ;; Update cached results for each formula:
+  ;; https://poi.apache.org/spreadsheet/eval.html
+  (-> wb .getCreationHelper .createFormulaEvaluator .evaluateAll))
+
+(S/defn render-to-file
   "Build a report based on a spreadsheet template"
-  [template-file output-file replacements]
+  [template-file :- S/Str
+   output-file :- S/Str
+   replacements :- ReplacementsType]
   (let [tmpfile (File/createTempFile "excel-output" ".xlsx")
         tmpcopy (File/createTempFile "excel-template-copy" ".xlsx")
         replacements (normalize replacements)]
@@ -405,38 +462,17 @@ If there are any nil values in the source collection, the corresponding cells ar
                         sheet-name (.getSheetName src-sheet)
                         sheet-data (or (get replacements sheet-name)
                                        (get replacements sheet-num) {})
-                        nrows (inc (.getLastRowNum src-sheet))
                         src-has-formula? (or (has-formula? src-sheet)
                                              (c/has-chart? src-sheet))
                         wb (XSSFWorkbook. input-pkg)
                         wb (if src-has-formula? wb (SXSSFWorkbook. wb))]
                     (try
-                      (let [sheet (.getSheetAt wb sheet-num)]
-                        ;; loop through the rows of the template, copying
-                        ;; from the template or injecting data rows as
-                        ;; appropriate
-                        (loop [src-row-num 0
-                               dst-row-num 0]
-                          (when (< src-row-num nrows)
-                            (let [src-row (.getRow src-sheet src-row-num)]
-                              (if-let [data-rows (get sheet-data src-row-num)]
-                                (do
-                                  (doseq [[index data-row] (indexed data-rows)]
-                                    (let [new-row (.createRow sheet (+ dst-row-num index))]
-                                      (inject-data-row data-row translation-table wb sheet src-row new-row)
-                                      (when src-row
-                                        (copy-styles wb src-row new-row))))
-                                  (recur (inc src-row-num) (+ dst-row-num (count data-rows))))
-                                (do
-                                  (when src-row
-                                    (let [new-row (.createRow sheet dst-row-num)]
-                                      (copy-row translation-table wb sheet src-row new-row)
-                                      (copy-styles wb src-row new-row)))
-                                  (recur (inc src-row-num) (inc dst-row-num)))))))
-                        (c/transform-charts sheet translation-table))
-                      ;; Update cached results for each formula:
-                      ;; https://poi.apache.org/spreadsheet/eval.html
-                      (-> wb .getCreationHelper .createFormulaEvaluator .evaluateAll)
+                      (copy-from-template! src-sheet
+                                           wb
+                                           sheet-num
+                                           sheet-data
+                                           translation-table)
+                      (re-evaluate! wb)
                       ;; Write the resulting output Workbook
                       (with-open [fos (FileOutputStream. (nth outputs sheet-num))]
                         (.write wb fos))
@@ -464,15 +500,21 @@ If there are any nil values in the source collection, the corresponding cells ar
 (comment (let [template-file "foo.xlsx"
                output-file "/tmp/bar.xlsx"
 
-               data {"Sheet1" [{2 [[nil "foo"]]}
+               data {"Sheet1" [{3 [[nil "foo" "poo"]
+                                   ["a" "b"]
+                                   ["c" "C"]]
+                                4 [["x"]]
+                                5 [["d" "D"]]
+                                10 [] #_{:file "foo-data.csv"
+                                    :delimiter \,}}
                                {2 [[nil "bar"]] :sheet-name "Sheet1-a"}
                                {2 [[nil "baz"]] :sheet-name "Sheet1-b"}]
                      "Sheet2" [{2 [[nil "qux"]]}]}]
            (render-to-file template-file output-file data)
-           (sh "libreoffice" "--calc" output-file))
+           (clojure.java.shell/sh "open" output-file))
 
          (let [template-file "foo.xlsx"
                output-file "/tmp/bar.xlsx"
                data {"Sheet1" {2 [[nil "old!"]]}}]
            (render-to-file template-file output-file data)
-           (sh "libreoffice" "--calc" output-file)))
+           (clojure.java.shell/sh "libreoffice" "--calc" output-file)))
