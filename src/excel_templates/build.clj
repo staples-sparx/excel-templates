@@ -55,26 +55,25 @@
   "Get the value from a cell depending on the type"
   [cell]
   ;; I don't know why case doesn't work here, but it wasn't matching
-  (let [cell-type (.getCellType cell)]
-   (cond
-     (= cell-type Cell/CELL_TYPE_STRING)
-     (-> cell .getRichStringCellValue .getString)
+  (condp = (.getCellType cell)
+    Cell/CELL_TYPE_STRING
+    (-> cell .getRichStringCellValue .getString)
 
-     (= cell-type Cell/CELL_TYPE_NUMERIC)
-     (if (DateUtil/isCellDateFormatted cell)
-       (.getDateCellValue cell)
-       (.getNumericCellValue cell))
+    Cell/CELL_TYPE_NUMERIC
+    (if (DateUtil/isCellDateFormatted cell)
+      (.getDateCellValue cell)
+      (.getNumericCellValue cell))
 
-     (= cell-type Cell/CELL_TYPE_BOOLEAN)
-     (.getBooleanCellValue cell)
+    Cell/CELL_TYPE_BOOLEAN
+    (.getBooleanCellValue cell)
 
-     (= cell-type Cell/CELL_TYPE_FORMULA)
-     (.getCellFormula cell)
+    Cell/CELL_TYPE_FORMULA
+    (.getCellFormula cell)
 
-     (= cell-type Cell/CELL_TYPE_BLANK)
-     nil
+    Cell/CELL_TYPE_BLANK
+    nil
 
-     :else (do (println (str "returning nil because type is " (.getCellType cell))) nil))))
+    (do (println (str "returning nil because type is " (.getCellType cell))) nil)))
 
 
 (defprotocol IExcelValue
