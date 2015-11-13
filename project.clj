@@ -9,4 +9,8 @@
                  [clojure-csv/clojure-csv "2.0.1"]
                  [joda-time "2.7"]
                  [prismatic/schema "1.0.3"]]
+  :plugins [[s3-wagon-private "1.1.2"]]
+  :repositories {"releases" {:url "s3p://runa-maven/releases/"
+                             :username [:env/archiva_username]
+                             :passphrase [:env/archiva_passphrase]}}
   :profiles {:repl {:dependencies [[org.clojure/clojure "1.7.0"]]}})
