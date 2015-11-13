@@ -9,6 +9,7 @@
             [clojure.java.shell :as sh]
             [clojure.pprint :as pp]
             [clojure.set :as set]
+            [clojure-csv.core :as csv]
             [schema.core :as S]
             [excel-templates.charts :as c]
             [excel-templates.formulas :as fo]))
@@ -18,7 +19,7 @@
 
 (def CSVType
   {:file S/Str
-   :left S/Int ; left column offset
+   (S/optional-key :left) S/Int ; left column offset
    (S/optional-key :delimiter) Character
    (S/optional-key :end-of-line) S/Str
    (S/optional-key :quote-char) Character
@@ -135,8 +136,18 @@
   (.setCellFormula cell formula)
   (-> wb .getCreationHelper .createFormulaEvaluator (.evaluateFormulaCell cell)))
 
-(defn copy-row
-  "Copy a single row of data from the template to the output, and the styles with them"
+(defn- copy-data-row
+  "Write a row of data to the sheet, skipping nil cells"
+  [wb sheet row-num row-data]
+  (let [row-handle (or (.getRow sheet row-num) (.createRow sheet row-num))]
+            (dotimes [col-num (count row-data)]
+              (let [data-val (nth row-data col-num)
+                    cell (or (.getCell row-handle col-num) (.createCell row-handle col-num))]
+                (when (some? data-val)
+                  (set-val wb cell data-val))))))
+
+(defn copy-template-row
+  "Copy a row of cells from the template to the output, and the styles with them"
   [translation-table wb sheet src-row dst-row]
   (when src-row
     (let [ncols (inc (.getLastCellNum src-row))]
@@ -372,21 +383,25 @@
               v)))
    replacements))
 
+(S/defn ^:private csv-row-seq
+  [{:keys [file left] :as params} :- CSVType]
+  (let [csv-reader (io/reader file)
+        parse-opts (select-keys params [:delimiter :end-of-line :quote-char :strict])]
+    (apply csv/parse-csv csv-reader (flatten parse-opts))))
+
 (S/defn ^:private copy-from-template!
   "Copy all cells from the template to the sheet."
   [src-sheet 
    dst-wb
    sheet
    translation-table]
-  ;; loop through the rows of the template, copying
-  ;; from the template or injecting data rows as
-  ;; appropriate
+  ;; loop through the rows of the template, copying each
   (let [nrows (inc (.getLastRowNum src-sheet))]
     (loop [row-num 0]
       (when (< row-num nrows)
         (when-let [src-row (.getRow src-sheet row-num)]
           (let [new-row (.createRow sheet row-num)]
-            (copy-row translation-table dst-wb sheet src-row new-row)
+            (copy-template-row translation-table dst-wb sheet src-row new-row)
             (copy-styles dst-wb src-row new-row))
           (recur (inc row-num)))))))
 
@@ -396,21 +411,18 @@
   [dst-wb
    sheet
    sheet-data :- SheetType]
-  ;; loop through the rows of the data, copying rows as we go
+  ;; loop through the rows of the data, copying each
   (doseq [[row-offset row-group] sheet-data]
-    (if (map? row-group)
-      ; handle csv file 
-      nil
-      ; copy-row
-      (loop [rows row-group
+    ; if row-group is a file, read it in
+    (let [row-seq (if (map? row-group) 
+                    (csv-row-seq row-group)
+                    row-group)
+          offset-left (if (map? row-group) (or (:left row-group) 0) 0)
+          left-vec (vec (take offset-left (repeat nil)))]
+      (loop [rows row-seq
              row-num row-offset]
         (when-let [row-data (first rows)]
-          (let [row-handle (or (.getRow sheet row-num) (.createRow sheet row-num))]
-            (dotimes [col-num (count row-data)]
-              (let [data-val (nth row-data col-num)
-                    cell (or (.getCell row-handle col-num) (.createCell row-handle col-num))]
-                (when (some? data-val)
-                  (set-val dst-wb cell data-val)))))
+          (copy-data-row dst-wb sheet row-num (vec (concat left-vec row-data))) 
           (recur (next rows) (inc row-num)))))))
 
 (defn- re-evaluate!
@@ -496,9 +508,9 @@
                                    ["c" "C"]]
                                 4 [["x"]]
                                 5 [["d" "D"]]
-                                10 [] #_{:file "foo-data.csv"
+                                10 {:file "foo-data.csv"
                                     :delimiter \,
-                                    :left 0}}
+                                    :left 3}}
                                {2 [[nil "bar"]] :sheet-name "Sheet1-a"}
                                {2 [[nil "baz"]] :sheet-name "Sheet1-b"}]
                      "Sheet2" [{2 [[nil "qux"]]}]}]
