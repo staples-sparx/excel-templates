@@ -18,16 +18,17 @@
 
 (def CSVType
   {:file S/Str
+   :left S/Int ; left column offset
    (S/optional-key :delimiter) Character
    (S/optional-key :end-of-line) S/Str
    (S/optional-key :quote-char) Character
    (S/optional-key :strict) S/Bool})
 
-(def ^:private RowSeqType
-  [(S/cond-pre RowType CSVType)])
+(def ^:private RowGroupType
+  (S/cond-pre [RowType] CSVType))
 
 (def ^:private SheetType
-  {S/Int RowSeqType ; rows starting at offset
+  {S/Int RowGroupType ; rows starting at offset
    (S/optional-key :sheet-name) S/Str})
 
 (def ^:private ReplacementsType
@@ -42,12 +43,6 @@
     (with-open [fos (FileOutputStream. (.getPath tmpfile))]
       (.write wb fos))
     tmpfile))
-
-(defn indexed
-  "For the collection coll with elements x0..xn, return a lazy sequence
-   of pairs [0 x0]..[n xn]"
-  [coll]
-  (map (fn [i x] [i x]) (range) coll))
 
 (defn cell-seq
   "Return a lazy seq of cells on the sheet in row major order (that is, across
@@ -76,7 +71,6 @@
 (defn get-val
   "Get the value from a cell depending on the type"
   [cell]
-  ;; I don't know why case doesn't work here, but it wasn't matching
   (condp = (.getCellType cell)
     Cell/CELL_TYPE_STRING
     (-> cell .getRichStringCellValue .getString)
@@ -155,26 +149,6 @@
                    formula (fo/translate-formula translation-table wb sheet target val)]
                (set-formula wb dst-cell formula))
              (set-val wb dst-cell val))))))))
-
-(defn inject-data-row
-  "Take the data from the collection data-row at set the cell values in the target row accordingly.
-If there are any nil values in the source collection, the corresponding cells are not modified."
-  [data-row translation-table wb sheet src-row dst-row]
-  (let [src-cols (inc (if src-row (.getLastCellNum src-row) -1))
-        data-cols (count data-row)
-        ncols (max src-cols data-cols)]
-    (doseq [cell-num (range ncols)]
-      (let [data-val (nth data-row cell-num nil)
-            src-cell (some-> src-row (.getCell cell-num))
-            src-val (some-> src-cell get-val)]
-        (when-let [val (or data-val src-val)]
-          (let [dst-cell (or (.getCell dst-row cell-num)
-                             (.createCell dst-row cell-num))]
-            (if (and (not data-val) (formula? src-cell))
-              (let [target [(.getRowNum dst-row) cell-num]
-                    formula (fo/translate-formula translation-table wb sheet target val)]
-                (set-formula wb dst-cell formula))
-              (set-val wb dst-cell val))))))))
 
 (defn copy-styles
   "Copy the styles from one row to another. We don't really copy, but rather
@@ -399,40 +373,53 @@ If there are any nil values in the source collection, the corresponding cells ar
    replacements))
 
 (S/defn ^:private copy-from-template!
-  [src-sheet dst-wb
-   sheet-num :- S/Int
-   sheet-data :- SheetType
+  "Copy all cells from the template to the sheet."
+  [src-sheet 
+   dst-wb
+   sheet
    translation-table]
   ;; loop through the rows of the template, copying
   ;; from the template or injecting data rows as
   ;; appropriate
-  (let [sheet (.getSheetAt dst-wb sheet-num)
-        nrows (inc (.getLastRowNum src-sheet))]
-    (loop [src-row-num 0
-           dst-row-num 0]
-      (when (< src-row-num nrows)
-        (let [src-row (.getRow src-sheet src-row-num)]
-          (if-let [data-rows (get sheet-data src-row-num)]
-            (do
-              (doseq [[index data-row] (indexed data-rows)]
-                (let [new-row (.createRow sheet (+ dst-row-num index))]
-                  (inject-data-row data-row translation-table dst-wb sheet src-row new-row)
-                  (when src-row
-                    (copy-styles dst-wb src-row new-row))))
-              (recur (inc src-row-num) (+ dst-row-num (count data-rows))))
-            (do
-              (when src-row
-                (let [new-row (.createRow sheet dst-row-num)]
-                  (copy-row translation-table dst-wb sheet src-row new-row)
-                  (copy-styles dst-wb src-row new-row)))
-              (recur (inc src-row-num) (inc dst-row-num)))))))
-    (c/transform-charts sheet translation-table)))
+  (let [nrows (inc (.getLastRowNum src-sheet))]
+    (loop [row-num 0]
+      (when (< row-num nrows)
+        (when-let [src-row (.getRow src-sheet row-num)]
+          (let [new-row (.createRow sheet row-num)]
+            (copy-row translation-table dst-wb sheet src-row new-row)
+            (copy-styles dst-wb src-row new-row))
+          (recur (inc row-num)))))))
+
+(S/defn ^:private copy-from-data!
+  "Copy all data into the sheet, overwriting any previous values.
+  Nil cells will not be modified."
+  [dst-wb
+   sheet
+   sheet-data :- SheetType]
+  ;; loop through the rows of the data, copying rows as we go
+  (doseq [[row-offset row-group] sheet-data]
+    (if (map? row-group)
+      ; handle csv file 
+      nil
+      ; copy-row
+      (loop [rows row-group
+             row-num row-offset]
+        (when-let [row-data (first rows)]
+          (let [row-handle (or (.getRow sheet row-num) (.createRow sheet row-num))]
+            (dotimes [col-num (count row-data)]
+              (let [data-val (nth row-data col-num)
+                    cell (or (.getCell row-handle col-num) (.createCell row-handle col-num))]
+                (when (some? data-val)
+                  (set-val dst-wb cell data-val)))))
+          (recur (next rows) (inc row-num)))))))
 
 (defn- re-evaluate!
-  [wb]
+  [wb sheet translation-table]
   ;; Update cached results for each formula:
   ;; https://poi.apache.org/spreadsheet/eval.html
-  (-> wb .getCreationHelper .createFormulaEvaluator .evaluateAll))
+  (-> wb .getCreationHelper .createFormulaEvaluator .evaluateAll)
+  ;; Update charts
+  (c/transform-charts sheet translation-table))
 
 (S/defn render-to-file
   "Build a report based on a spreadsheet template"
@@ -470,12 +457,13 @@ If there are any nil values in the source collection, the corresponding cells ar
                         wb (XSSFWorkbook. input-pkg)
                         wb (if src-has-formula? wb (SXSSFWorkbook. wb))]
                     (try
-                      (copy-from-template! src-sheet
-                                           wb
-                                           sheet-num
-                                           sheet-data
-                                           translation-table)
-                      (re-evaluate! wb)
+                      (let [sheet (.getSheetAt wb sheet-num)]
+                        (copy-from-template! src-sheet
+                                             wb
+                                             sheet
+                                             translation-table)
+                        (copy-from-data! wb sheet sheet-data)
+                        (re-evaluate! wb sheet translation-table))
                       ;; Write the resulting output Workbook
                       (with-open [fos (FileOutputStream. (nth outputs sheet-num))]
                         (.write wb fos))
@@ -503,13 +491,14 @@ If there are any nil values in the source collection, the corresponding cells ar
 (comment (let [template-file "foo.xlsx"
                output-file "/tmp/bar.xlsx"
 
-               data {"Sheet1" [{3 [[nil "foo" "poo"]
+               data {"Sheet1" [{1 [[nil "foo" "moo"]
                                    ["a" "b"]
                                    ["c" "C"]]
                                 4 [["x"]]
                                 5 [["d" "D"]]
                                 10 [] #_{:file "foo-data.csv"
-                                    :delimiter \,}}
+                                    :delimiter \,
+                                    :left 0}}
                                {2 [[nil "bar"]] :sheet-name "Sheet1-a"}
                                {2 [[nil "baz"]] :sheet-name "Sheet1-b"}]
                      "Sheet2" [{2 [[nil "qux"]]}]}]
