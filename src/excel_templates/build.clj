@@ -151,15 +151,15 @@
   [translation-table wb sheet src-row dst-row]
   (when src-row
     (let [ncols (inc (.getLastCellNum src-row))]
-     (doseq [cell-num (range ncols)]
-       (when-let [src-cell (.getCell src-row cell-num Row/RETURN_BLANK_AS_NULL)]
-         (let [dst-cell (.createCell dst-row cell-num)
-               val (get-val src-cell)]
-           (if (formula? src-cell)
-             (let [target [(.getRowNum dst-row) cell-num]
-                   formula (fo/translate-formula translation-table wb sheet target val)]
-               (set-formula wb dst-cell formula))
-             (set-val wb dst-cell val))))))))
+      (dotimes [cell-num ncols]
+        (when-let [src-cell (.getCell src-row cell-num Row/RETURN_BLANK_AS_NULL)]
+          (let [dst-cell (.createCell dst-row cell-num)
+                val (get-val src-cell)]
+            (if (formula? src-cell)
+              (let [target [(.getRowNum dst-row) cell-num]
+                    formula (fo/translate-formula translation-table wb sheet target val)]
+                (set-formula wb dst-cell formula))
+              (set-val wb dst-cell val))))))))
 
 (defn copy-styles
   "Copy the styles from one row to another. We don't really copy, but rather
@@ -167,7 +167,7 @@
    are the same. This works since the destination is a copy of the source."
   [wb src-row dst-row]
   (let [ncols (inc (.getLastCellNum src-row))]
-    (doseq [cell-num (range ncols)]
+    (dotimes [cell-num ncols]
       (when-let [src-cell (.getCell src-row cell-num)]
         (let [dst-cell (or (.getCell dst-row cell-num)
                            (.createCell dst-row cell-num))]
@@ -194,7 +194,7 @@
       (io/copy template-file tmpfile)
       (with-open [pkg (OPCPackage/open tmpfile)]
         (let [wb (XSSFWorkbook. pkg)]
-          (doseq [sheet-num (range (.getNumberOfSheets wb))]
+          (dotimes [sheet-num (.getNumberOfSheets wb)]
             (let [sheet (.getSheetAt wb sheet-num)
                   nrows (inc (.getLastRowNum sheet))]
               (doseq [row-num (reverse (range nrows))]
@@ -220,7 +220,7 @@
   incoming replacements."
   [sheet replacements]
   (let [row-nums (keys (replacements (.getSheetName sheet)))]
-    (doseq [row-num (range (inc (apply max row-nums)))]
+    (dotimes [row-num (inc (apply max row-nums))]
       (or (.getRow sheet row-num)
           (.createRow sheet row-num)))))
 
@@ -458,7 +458,7 @@
                 inputs  (vec (concat [tmpfile]          intermediate-files))
                 outputs (vec (concat intermediate-files [output-file]     ))]
             (try
-              (doseq [sheet-num (range (.getNumberOfSheets template))]
+              (dotimes [sheet-num (.getNumberOfSheets template)]
                 (with-open [input-pkg (OPCPackage/open (nth inputs sheet-num))]
                   (let [src-sheet (.getSheetAt template sheet-num)
                         sheet-name (.getSheetName src-sheet)
@@ -507,12 +507,13 @@
                                    ["a" "b"]
                                    ["c" "C"]]
                                 4 [["x"]]
-                                5 [["d" "D"]]
-                                10 {:file "foo-data.csv"
-                                    :delimiter \,
-                                    :left 3}}
+                                5 [["d" "D"]]}
                                {2 [[nil "bar"]] :sheet-name "Sheet1-a"}
-                               {2 [[nil "baz"]] :sheet-name "Sheet1-b"}]
+                               {2 [[nil "baz"]] :sheet-name "Sheet1-b"}
+                               {1 [[nil "name" "taste" "color"]]
+                                2 {:file "foo-data.csv"
+                                   :delimiter \,
+                                   :left 1} :sheet-name "Fruits"}]
                      "Sheet2" [{2 [[nil "qux"]]}]}]
            (render-to-file template-file output-file data)
            (clojure.java.shell/sh "open" output-file))
