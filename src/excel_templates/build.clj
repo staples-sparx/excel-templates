@@ -32,7 +32,7 @@
   {S/Int RowGroupType ; rows starting at offset
    (S/optional-key :sheet-name) S/Str})
 
-(def ^:private ReplacementsType
+(def ReplacementsType
   ; Replacements schema
   {S/Str [SheetType]})
 
@@ -435,8 +435,8 @@
 
 (S/defn render-to-file
   "Build a report based on a spreadsheet template"
-  [template-file :- S/Str
-   output-file :- S/Str
+  [template-file :- (S/cond-pre S/Str File)
+   output-file :- File
    replacements :- ReplacementsType]
   (let [tmpfile (File/createTempFile "excel-output" ".xlsx")
         tmpcopy (File/createTempFile "excel-template-copy" ".xlsx")
