@@ -90,7 +90,8 @@
     Cell/CELL_TYPE_BLANK
     nil
 
-    (do (println (str "returning nil because type is " (.getCellType cell))) nil)))
+    (do (fo/debug-println "Get-val returning nil because type is" (.getCellType cell))
+        nil)))
 
 
 (defprotocol IExcelValue
@@ -134,7 +135,8 @@
    (str "Set formula: (" (.getRowIndex cell) ", " (.getColumnIndex cell)
         "): " formula) )
   (.setCellFormula cell formula)
-  (-> wb .getCreationHelper .createFormulaEvaluator (.evaluateFormulaCell cell)))
+  ; Do not evaluate yet
+  #_(-> wb .getCreationHelper .createFormulaEvaluator (.evaluateFormulaCell cell)))
 
 (defn- copy-data-row
   "Write a row of data to the sheet, skipping nil cells"
@@ -429,9 +431,15 @@
   [wb sheet translation-table]
   ;; Update cached results for each formula:
   ;; https://poi.apache.org/spreadsheet/eval.html
-  (-> wb .getCreationHelper .createFormulaEvaluator .evaluateAll)
+  (try 
+    (-> wb .getCreationHelper .createFormulaEvaluator .evaluateAll)
+    (catch Exception e
+      (fo/debug-println e)))
   ;; Update charts
-  (c/transform-charts sheet translation-table))
+  (try
+    (c/transform-charts sheet translation-table)
+    (catch Exception e
+      (fo/debug-println e))))
 
 (S/defn render-to-file
   "Build a report based on a spreadsheet template"
