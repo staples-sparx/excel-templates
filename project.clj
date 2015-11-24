@@ -1,4 +1,4 @@
-(defproject staples-sparx/excel-templates "0.4.1"
+(defproject staples-sparx/excel-templates "0.4.2"
   :description "Build Excel files by combining a template with plain old data"
   :url "https://github.com/tomfaulhaber/excel-templates"
   :license {:name "Eclipse Public License"
